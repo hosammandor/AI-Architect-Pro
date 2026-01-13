@@ -1,3 +1,8 @@
 google-generativeai
 streamlit
 Pillow
+pymupdf
+requests
+pandas
+python-docx
+openpyxl
