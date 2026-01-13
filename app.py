@@ -1,141 +1,146 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+import io
 import os
+import requests
+import fitz  # PyMuPDF
+import pandas as pd
+from docx import Document
 
-# --- إعدادات الصفحة ---
-st.set_page_config(page_title="AI Pro Architect", page_icon="🪄", layout="wide")
+# --- 1. إعدادات الصفحة والتصميم ---
+st.set_page_config(page_title="AI Architect Pro", page_icon="🪄", layout="wide")
 
-# --- CSS لتطوير الشكل ليكون عصري جداً ---
 st.markdown("""
     <style>
-    /* تغيير الخلفية العامة */
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e1e2f 100%);
-        color: #ffffff;
-    }
-    
-    /* تنسيق الحاويات (Cards) */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 20px;
-        background-color: transparent;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: rgba(255, 255, 255, 0.05);
-        border-radius: 10px 10px 0px 0px;
-        color: white;
-        font-weight: bold;
-    }
-
-    /* تحسين شكل الزراير */
-    .stButton>button {
-        background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
-        color: white;
-        border: none;
-        padding: 15px 30px;
-        border-radius: 12px;
-        font-weight: 700;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0px 10px 20px rgba(0, 210, 255, 0.3);
-    }
-
-    /* صندوق النتائج */
-    .result-header {
-        color: #00d2ff;
-        font-weight: bold;
-        margin-bottom: 10px;
-        display: flex;
-        align-items: center;
-    }
-
-    /* القائمة الجانبية */
-    section[data-testid="stSidebar"] {
-        background-color: rgba(15, 23, 42, 0.8);
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
-    }
+    .stApp { background: linear-gradient(135deg, #0f172a 0%, #1e1e2f 100%); color: #ffffff; }
+    .stTabs [data-baseweb="tab-list"] { gap: 20px; background-color: transparent; }
+    .stTabs [data-baseweb="tab"] { height: 50px; background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; color: white; font-weight: bold; }
+    .stButton>button { background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%); color: white; border: none; padding: 12px; border-radius: 12px; font-weight: 700; transition: 0.3s; }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0px 10px 20px rgba(0, 210, 255, 0.3); }
+    .result-box { background: rgba(255, 255, 255, 0.03); padding: 20px; border-radius: 15px; border-left: 5px solid #00d2ff; margin-top: 15px; }
+    section[data-testid="stSidebar"] { background-color: rgba(15, 23, 42, 0.8); border-right: 1px solid rgba(255, 255, 255, 0.1); }
     </style>
     """, unsafe_allow_html=True)
 
-# --- Sidebar الإعدادات ---
+# --- 2. وظائف التصدير (Word & Excel) ---
+def get_word_download(text):
+    doc = Document()
+    doc.add_heading('AI Architect Pro - Report', 0)
+    doc.add_paragraph(text)
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+def get_excel_download(text):
+    try:
+        from io import StringIO
+        if "|" in text:
+            lines = [l.strip() for l in text.split('\n') if "|" in l]
+            if len(lines) > 2:
+                df = pd.read_csv(StringIO('\n'.join(lines)), sep="|", skipinitialspace=True).dropna(axis=1, how='all')
+                df.columns = [c.strip() for c in df.columns]
+                out = io.BytesIO()
+                with pd.ExcelWriter(out, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False)
+                return out.getvalue()
+    except: return None
+    return None
+
+# --- 3. القائمة الجانبية ---
 with st.sidebar:
     st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
-    api_key = st.text_input("Gemini API Key:", type="password", help="Enter your Google AI Studio Key")
-    
+    api_key = st.text_input("Gemini API Key:", type="password")
     current_model = "gemini-1.5-flash"
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            current_model = st.selectbox("Select Intelligence Level:", models, index=models.index("gemini-1.5-flash") if "gemini-1.5-flash" in models else 0)
-        except:
-            st.error("Invalid API Key or Connection Issue")
+            available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            current_model = st.selectbox("Intelligence Level:", available_models, index=0)
+        except: st.error("Invalid API Key")
 
-# --- محتوى البرنامج الرئيسي ---
+# --- 4. المحتوى الرئيسي ---
 if api_key:
     try:
         model = genai.GenerativeModel(current_model)
-        
         st.markdown("<h1 style='text-align: center;'>🪄 AI <span style='color: #00d2ff;'>Architect</span> Pro</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #94a3b8;'>بوابتك لتحويل الأفكار العادية إلى نتائج بصرية عالمية</p>", unsafe_allow_html=True)
-
-        tab1, tab2 = st.tabs(["✨ Prompt Engineer", "📸 Vision Studio"])
+        
+        tab1, tab2, tab3 = st.tabs(["✨ Prompt Engineer", "📸 Vision Studio", "📑 Doc Intelligence"])
 
         # --- Tab 1: مهندس البرومبتات ---
         with tab1:
-            col1, col2 = st.columns([1, 1], gap="large")
-            
+            col1, col2 = st.columns(2, gap="large")
             with col1:
                 st.markdown("### ✍️ Describe Your Vision")
-                raw_input = st.text_area("", placeholder="مثلاً: بطل خارق بزي فرعوني في مدينة مستقبلية...", height=150)
-                target = st.selectbox("Platform Target:", ["Midjourney v6", "DALL-E 3", "Canva Magic Media", "Leonardo AI"])
-                generate_btn = st.button("Refine & Optimize")
-
+                raw_input = st.text_area("Idea:", placeholder="بطل خارق فرعوني...", height=150)
+                target = st.selectbox("Platform:", ["Midjourney", "DALL-E 3", "Leonardo AI"])
+                if st.button("Optimize Prompt ✨"):
+                    if raw_input:
+                        with st.spinner("Engineering..."):
+                            res = model.generate_content(f"Create a professional English image prompt for {target} based on: {raw_input}")
+                            st.session_state['p_res'] = res.text
             with col2:
-                st.markdown("### 🚀 Optimized Output")
-                if generate_btn and raw_input:
-                    with st.spinner("🧠 Engineering the perfect prompt..."):
-                        prompt = f"Act as a professional prompt engineer. Transform this idea into a detailed, high-quality English prompt for {target}. Include: artistic style, lighting (cinematic, volumetric), camera angle (low angle, wide shot), and technical specs (8k, photorealistic). Original Idea: {raw_input}"
-                        response = model.generate_content(prompt)
-                        
-                        st.markdown("<div class='result-header'>✅ Ready to Copy:</div>", unsafe_allow_html=True)
-                        # استخدام st.code عشان زرار النسخ يظهر تلقائياً
-                        st.code(response.text, language="text")
-                        st.balloons()
-                else:
-                    st.info("اكتب فكرتك ودوس على Refine عشان تشوف السحر!")
+                if 'p_res' in st.session_state:
+                    st.markdown("### 🚀 Optimized Output")
+                    st.code(st.session_state['p_res'])
+                    st.balloons()
 
-        # --- Tab 2: استوديو الرؤية ---
+        # --- Tab 2: استوديو الرؤية والروابط ---
         with tab2:
-            st.markdown("### 👁️ Image Intelligence & Editing")
-            uploaded_file = st.file_uploader("Upload reference image", type=["png", "jpg", "jpeg"])
+            st.markdown("### 👁️ Image Intelligence")
+            v_mode = st.radio("Source:", ["Upload Image", "Image URL"], horizontal=True)
+            v_imgs = []
             
-            if uploaded_file:
-                v_col1, v_col2 = st.columns(2, gap="medium")
-                img = Image.open(uploaded_file)
-                
-                with v_col1:
-                    st.image(img, caption="Original Preview", use_container_width=True)
-                
-                with v_col2:
-                    edit_req = st.text_input("What changes should AI make?", placeholder="E.g. Change the background to Mars...")
-                    if st.button("Generate Edit Prompt") and edit_req:
-                        with st.spinner("🔍 Analyzing every pixel..."):
-                            response = model.generate_content([
-                                f"Analyze this image and the request: '{edit_req}'. Create a professional English text-to-image prompt to achieve this exact edit. Focus on keeping the main subject consistent while changing the rest. Use professional keywords.", 
-                                img
-                            ])
-                            st.markdown("<div class='result-header'>🎨 New Edit Prompt:</div>", unsafe_allow_html=True)
-                            st.code(response.text, language="text")
+            if v_mode == "Upload Image":
+                up_v = st.file_uploader("Choose Image", type=["png", "jpg", "jpeg"], key="v_up")
+                if up_v:
+                    img = Image.open(up_v)
+                    v_imgs.append(img)
+                    st.image(img, width=300)
+            else:
+                u_url = st.text_input("URL:")
+                if u_url:
+                    r = requests.get(u_url); img = Image.open(io.BytesIO(r.content))
+                    v_imgs.append(img); st.image(img, width=300)
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+            edit_q = st.text_input("What should AI do with this image?")
+            if st.button("Analyze Image 🔍") and v_imgs:
+                with st.spinner("Analyzing..."):
+                    res = model.generate_content([edit_q if edit_q else "Describe this image in detail", v_imgs[0]])
+                    st.markdown(f'<div class="result-box">{res.text}</div>', unsafe_allow_html=True)
+
+        # --- Tab 3: ذكاء المستندات والتحويل (Excel/Word) ---
+        with tab3:
+            st.markdown("### 📑 PDF & Table Intelligence")
+            up_doc = st.file_uploader("Upload PDF or Scanned Doc", type=["pdf", "png", "jpg"])
+            
+            doc_imgs = []
+            if up_doc:
+                if up_doc.type == "application/pdf":
+                    doc = fitz.open(stream=up_doc.read(), filetype="pdf")
+                    for page in doc:
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2,2))
+                        doc_imgs.append(Image.open(io.BytesIO(pix.tobytes("png"))))
+                    st.success(f"Loaded {len(doc_imgs)} pages.")
+                else:
+                    doc_imgs.append(Image.open(up_doc))
+                    st.image(doc_imgs[0], width=300)
+
+            doc_q = st.text_area("Instructions:", placeholder="مثلاً: استخرج الجدول المالي، أو لخص الملف...")
+            if st.button("Process Document 🚀") and doc_imgs:
+                with st.spinner("Extracting Data..."):
+                    res = model.generate_content([doc_q] + doc_imgs)
+                    st.session_state['doc_res'] = res.text
+                    st.markdown(f'<div class="result-box">{res.text}</div>', unsafe_allow_html=True)
+
+            if 'doc_res' in st.session_state:
+                st.markdown("### 📥 Download Results")
+                d_c1, d_c2 = st.columns(2)
+                d_c1.download_button("Download Word 📄", get_word_download(st.session_state['doc_res']), "Report.docx")
+                ex_data = get_excel_download(st.session_state['doc_res'])
+                if ex_data:
+                    d_c2.download_button("Download Excel 📊", ex_data, "Data.xlsx")
+
+    except Exception as e: st.error(f"Error: {e}")
 else:
     st.warning("👈 ابدأ بإضافة الـ API Key في القائمة الجانبية")
