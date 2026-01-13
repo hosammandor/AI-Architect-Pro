@@ -18,7 +18,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { height: 50px; background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; color: white; font-weight: bold; }
     .stButton>button { background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%); color: white; border: none; padding: 12px; border-radius: 12px; font-weight: 700; width: 100%; transition: 0.3s; }
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0px 10px 20px rgba(0, 210, 255, 0.3); }
-    .result-box { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); padding: 20px; border-radius: 15px; border-left: 5px solid #00d2ff; margin-top: 15px; line-height: 1.6; }
+    .result-box { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); padding: 20px; border-radius: 15px; border-left: 5px solid #00d2ff; margin-top: 15px; }
     section[data-testid="stSidebar"] { background-color: rgba(15, 23, 42, 0.8); border-right: 1px solid rgba(255, 255, 255, 0.1); }
     </style>
     """, unsafe_allow_html=True)
@@ -47,19 +47,6 @@ def get_excel_download(text):
     except: return None
     return None
 
-# --- 3. القائمة الجانبية ---
-with st.sidebar:
-    st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
-    api_key = st.text_input("Gemini API Key:", type="password")
-    current_model = "gemini-1.5-flash"
-    if api_key:
-        try:
-            genai.configure(api_key=api_key)
-            available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            current_model = st.selectbox("Intelligence Level:", [m for m in available_models if "1.5" in m] or available_models)
-        except: st.error("Invalid API Key")
-
-# --- 4. معالجة ملفات الأوفيس ---
 def process_office_file(file):
     ext = file.name.split('.')[-1].lower()
     content = ""
@@ -77,7 +64,19 @@ def process_office_file(file):
         content = "Excel Data Summary:\n" + df.to_string()
     return f"--- File: {file.name} ---\n{content}"
 
-# --- 5. واجهة المستخدم ---
+# --- 3. القائمة الجانبية ---
+with st.sidebar:
+    st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
+    api_key = st.text_input("Gemini API Key:", type="password")
+    current_model = "gemini-1.5-flash"
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            current_model = st.selectbox("Intelligence Level:", [m for m in available_models if "1.5" in m] or available_models)
+        except: st.error("Invalid API Key")
+
+# --- 4. واجهة المستخدم الرئيسية ---
 if api_key:
     try:
         model = genai.GenerativeModel(current_model)
@@ -85,12 +84,11 @@ if api_key:
         
         tabs = st.tabs(["✨ Image Prompts", "📸 Vision Studio", "📑 Ultimate Doc Analyzer", "🧠 Universal Architect"])
 
-        # التاب الثالث هو اللي ضفنا فيه دعم الأوفيس
+        # --- Ultimate Doc Analyzer (With Copy Text) ---
         with tabs[2]:
-            st.markdown("### 📑 PDF, Office, Code & Text (Up to 10 files)")
-            # تحديث أنواع الملفات المسموحة
+            st.markdown("### 📑 PDF, Office, Code & Text Intelligence")
             allowed_types = ["pdf", "png", "jpg", "txt", "py", "docx", "xlsx", "pptx"]
-            up_docs = st.file_uploader("ارفع ملفاتك (PDF, Word, Excel, PPT, Image, Code)", type=allowed_types, accept_multiple_files=True)
+            up_docs = st.file_uploader("ارفع حتى 10 ملفات متنوعة", type=allowed_types, accept_multiple_files=True)
             
             final_payload = []
             if up_docs:
@@ -105,44 +103,46 @@ if api_key:
                             final_payload.append(Image.open(io.BytesIO(pix.tobytes("png"))))
                     else:
                         final_payload.append(Image.open(doc))
-                st.success(f"Ready to analyze {len(up_docs[:10])} files.")
+                st.success(f"Loaded {len(up_docs[:10])} files.")
 
-            d_query = st.text_area("التعليمات:", placeholder="لخص ملفات الورد، استخرج أرقام الإكسيل، أو اشرح السلايدات...")
+            d_query = st.text_area("التعليمات:", placeholder="لخص، ترجم، استخرج جداول، أو قارن الملفات...")
+            
             if st.button("Deep Analysis 🚀") and final_payload:
                 with st.spinner("Processing all documents..."):
                     res = model.generate_content([d_query] + final_payload)
                     st.session_state['final_res'] = res.text
-                    st.markdown(f'<div class="result-box">{res.text}</div>', unsafe_allow_html=True)
-                
+                    
             if 'final_res' in st.session_state:
-                st.markdown("### 📥 Download Results")
+                st.markdown("### 🔍 نتائج التحليل:")
+                # ميزة الـ Copy Text: عرض النتيجة داخل كود بلوك لسهولة النسخ
+                st.code(st.session_state['final_res'], language="markdown")
+                
+                st.markdown("### 📥 تحميل وتصدير:")
                 c1, c2 = st.columns(2)
                 c1.download_button("Download Report (Word) 📄", get_word_download(st.session_state['final_res']), "AI_Insight.docx")
                 ex = get_excel_download(st.session_state['final_res'])
                 if ex: c2.download_button("Download Data (Excel) 📊", ex, "Extracted_Data.xlsx")
 
-        # باقي التابات (Prompts, Vision, Architect) زي ما هي مع تحسينات بسيطة
+        # --- باقي التابات (للإبقاء على البرنامج كاملاً) ---
         with tabs[0]:
-            # (كود الـ Image Prompts المعتاد)
             st.markdown("### ✍️ Image Prompts Builder")
-            raw_p = st.text_area("Describe idea:", key="img_idea")
-            if st.button("Generate"): 
+            raw_p = st.text_area("Describe your idea:", key="tab0_p")
+            if st.button("Build Prompt", key="tab0_btn"): 
                 r = model.generate_content(f"Pro prompt for {raw_p}"); st.code(r.text)
 
         with tabs[1]:
-            # (كود الـ Vision Studio المعتاد)
             st.markdown("### 📸 Image Intelligence")
-            v_ups = st.file_uploader("Images", type=["jpg", "png"], accept_multiple_files=True, key="v_multi")
+            v_ups = st.file_uploader("Upload Image", type=["jpg", "png"], key="tab1_up")
             if v_ups:
-                q_v = st.text_input("Question about images?")
-                if st.button("Analyze Images"):
-                    r = model.generate_content([q_v] + [Image.open(f) for f in v_ups]); st.write(r.text)
+                st.image(v_ups, width=300)
+                q_v = st.text_input("Question about image?", key="tab1_q")
+                if st.button("Analyze Image", key="tab1_btn"):
+                    r = model.generate_content(["Analyze:", Image.open(v_ups), q_v]); st.write(r.text)
 
         with tabs[3]:
-            # (كود الـ Universal Architect المعتاد)
             st.markdown("### 🧠 Universal Prompt Architect")
-            u_in = st.text_area("Idea:")
-            if st.button("Build"): 
+            u_in = st.text_area("Idea:", key="tab3_in")
+            if st.button("Build Full Prompt", key="tab3_btn"): 
                 r = model.generate_content(f"Expert prompt for: {u_in}"); st.code(r.text)
 
     except Exception as e: st.error(f"Error: {e}")
