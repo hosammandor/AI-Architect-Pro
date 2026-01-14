@@ -1,4 +1,5 @@
 google-generativeai
+groq
 streamlit
 Pillow
 pymupdf
