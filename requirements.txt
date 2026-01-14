@@ -1,5 +1,6 @@
 google-generativeai
 groq
+openai
 streamlit
 Pillow
 pymupdf
