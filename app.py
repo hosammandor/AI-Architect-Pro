@@ -2,126 +2,183 @@ import streamlit as st
 import google.generativeai as genai
 from groq import Groq
 from PIL import Image
-import io
-import base64
-import requests
-import fitz
+import io, base64, time, requests, sys
+import fitz  # PyMuPDF
 import pandas as pd
 from docx import Document
 from pptx import Presentation
+from google.api_core import exceptions
 
-# --- 1. إعدادات الترميز والصفحة ---
-# نضمن أن النصوص العربية يتم التعامل معها كـ UTF-8
-import sys
+# --- ضبط الترميز للأمان ---
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-st.set_page_config(page_title="AI Architect Multi-Pro", page_icon="🚀", layout="wide")
+# --- 1. إعدادات الصفحة والتصميم العصرى ---
+st.set_page_config(page_title="AI Architect Multi-Power", page_icon="🪄", layout="wide")
 
-# --- 2. وظائف مساعدة لمعالجة الصور لـ Groq ---
-def encode_image_to_base64(image):
+st.markdown("""
+    <style>
+    .stApp { background: linear-gradient(135deg, #0f172a 0%, #1e1e2f 100%); color: #ffffff; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: transparent; }
+    .stTabs [data-baseweb="tab"] { height: 50px; background-color: rgba(255, 255, 255, 0.05); border-radius: 10px; color: white; font-weight: bold; }
+    .stButton>button { background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%); color: white; border: none; padding: 12px; border-radius: 12px; font-weight: 700; width: 100%; transition: 0.3s; }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0px 10px 20px rgba(0, 210, 255, 0.3); }
+    .result-box { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); padding: 20px; border-radius: 15px; border-left: 5px solid #00d2ff; margin-top: 15px; }
+    section[data-testid="stSidebar"] { background-color: rgba(15, 23, 42, 0.8); border-right: 1px solid rgba(255, 255, 255, 0.1); }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. وظائف المساعدة (تحويلات الملفات) ---
+def get_word_download(text):
+    doc = Document()
+    doc.add_heading('AI Architect Pro - Report', 0)
+    doc.add_paragraph(text)
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+def get_excel_download(text):
+    try:
+        from io import StringIO
+        if "|" in text:
+            lines = [l.strip() for l in text.split('\n') if "|" in l]
+            if len(lines) > 2:
+                df = pd.read_csv(StringIO('\n'.join(lines)), sep="|", skipinitialspace=True).dropna(axis=1, how='all')
+                df.columns = [c.strip() for c in df.columns]
+                out = io.BytesIO()
+                with pd.ExcelWriter(out, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False)
+                return out.getvalue()
+    except: return None
+    return None
+
+def process_office_file(file):
+    ext = file.name.split('.')[-1].lower()
+    content = ""
+    try:
+        if ext == 'docx':
+            doc = Document(file)
+            content = "\n".join([p.text for p in doc.paragraphs])
+        elif ext == 'pptx':
+            prs = Presentation(file)
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"): content += shape.text + "\n"
+        elif ext == 'xlsx':
+            df = pd.read_excel(file)
+            content = "Excel Summary:\n" + df.to_string()
+    except Exception as e: content = f"Error reading file: {e}"
+    return f"--- File: {file.name} ---\n{content}"
+
+def encode_image(image):
     buffered = io.BytesIO()
-    # تحويل الصورة لـ RGB لضمان التوافق مع JPEG
-    if image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
+    if image.mode in ("RGBA", "P"): image = image.convert("RGB")
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-# --- 3. محرك التوليد المطور (يدعم العربية و Groq Vision) ---
-def generate_ai_response(provider, api_key, model_name, text_query, images=None):
-    try:
-        if provider == "Google Gemini":
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(model_name)
-            payload = [text_query] + (images if images else [])
-            response = model.generate_content(payload)
-            return response.text
+# --- 3. محرك التوليد الآمن (Multi-Provider + Retry) ---
+def generate_response(provider, api_key, model_name, query, images=None):
+    max_retries = 2
+    for i in range(max_retries + 1):
+        try:
+            if provider == "Google Gemini":
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(model_name)
+                res = model.generate_content([query] + (images if images else []))
+                return res.text
+            
+            elif provider == "Groq (Ultra Fast)":
+                client = Groq(api_key=api_key)
+                if images and "vision" in model_name.lower():
+                    msgs = [{"role": "user", "content": [{"type": "text", "text": query}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encode_image(images[0])}"}}]}]
+                else:
+                    msgs = [{"role": "user", "content": query}]
+                res = client.chat.completions.create(messages=msgs, model=model_name)
+                return res.choices[0].message.content
         
-        elif provider == "Groq (Ultra Fast)":
-            client = Groq(api_key=api_key)
-            messages = []
-            
-            # إذا كان الموديل يدعم الرؤية (Vision) وفيه صور مرفوعة
-            if "vision" in model_name.lower() and images:
-                base64_image = encode_image_to_base64(images[0])
-                messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": text_query},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            }
-                        ]
-                    }
-                ]
-            else:
-                # محادثة نصية عادية (تدعم العربية بترميز UTF-8 تلقائياً)
-                messages = [{"role": "user", "content": text_query}]
-
-            chat_completion = client.chat.completions.create(
-                messages=messages,
-                model=model_name,
-            )
-            return chat_completion.choices[0].message.content
-            
-    except Exception as e:
-        st.error(f"خطأ من {provider}: {str(e)}")
-        return None
+        except exceptions.ResourceExhausted:
+            if i < max_retries: 
+                time.sleep(5); continue
+            else: st.error("Quota Exceeded!"); return None
+        except Exception as e:
+            st.error(f"Error: {str(e)}"); return None
+    return None
 
 # --- 4. القائمة الجانبية ---
 with st.sidebar:
-    st.markdown("<h2 style='color: #00d2ff;'>⚙️ Provider Settings</h2>", unsafe_allow_html=True)
-    provider = st.selectbox("Choose AI Provider:", ["Google Gemini", "Groq (Ultra Fast)"])
-    api_key = st.text_input(f"Enter {provider} API Key:", type="password")
+    st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
+    provider = st.selectbox("AI Provider:", ["Google Gemini", "Groq (Ultra Fast)"])
+    api_key = st.text_input(f"{provider} API Key:", type="password")
     
     if api_key:
         if provider == "Google Gemini":
-            model_choice = st.selectbox("Model:", ["gemini-1.5-flash", "gemini-1.5-pro"])
+            genai.configure(api_key=api_key)
+            models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            model_choice = st.selectbox("Model:", models, index=models.index("gemini-1.5-flash") if "gemini-1.5-flash" in models else 0)
         else:
-            # إضافة موديلات Groq Vision الجديدة والمجانية
-            model_choice = st.selectbox("Model:", [
-                "llama-3.2-11b-vision-preview",  # يدعم الصور!
-                "llama-3.1-70b-versatile", 
-                "llama-3.1-8b-instant",
-                "mixtral-8x7b-32768"
-            ])
+            model_choice = st.selectbox("Model:", ["llama-3.2-11b-vision-preview", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
 
-# --- 5. واجهة المستخدم ---
+# --- 5. واجهة المستخدم الرئيسية ---
 if api_key:
-    st.markdown("<h1 style='text-align: center;'>🚀 AI Architect <span style='color: #00d2ff;'>Multi-Pro</span></h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🪄 AI Architect <span style='color: #00d2ff;'>Multi-Power</span></h1>", unsafe_allow_html=True)
     
-    tabs = st.tabs(["📑 Ultimate Analyzer", "🧠 Universal Architect"])
+    tabs = st.tabs(["✨ Image Prompts", "📸 Vision Studio", "📑 Ultimate Doc Analyzer", "🧠 Universal Architect"])
 
+    # --- Tab 1: Image Prompts ---
     with tabs[0]:
-        col1, col2 = st.columns([1, 1.2])
+        col1, col2 = st.columns(2)
         with col1:
-            up_docs = st.file_uploader("Upload Files (Images, PDF, Text)", accept_multiple_files=True)
-            query = st.text_area("What is your request? (يدعم العربية)", placeholder="اكتب سؤالك هنا...")
-        
-        if st.button("Execute Analysis 🚀"):
-            if query:
-                with st.spinner(f"Processing via {provider}..."):
-                    # تجهيز البيانات
-                    images_list = []
-                    text_context = query
-                    
-                    if up_docs:
-                        for doc in up_docs:
-                            ext = doc.name.split('.')[-1].lower()
-                            if ext in ['jpg', 'jpeg', 'png']:
-                                images_list.append(Image.open(doc))
-                            # (يمكن إضافة باقي منطق معالجة PDF/Office هنا كما في النسخ السابقة)
+            raw_p = st.text_area("وصف الصورة:", placeholder="مثلاً: بطل خارق بزي فرعوني...")
+            target = st.selectbox("Target:", ["Midjourney", "DALL-E 3", "Leonardo AI"])
+            if st.button("Build Image Prompt"):
+                res = generate_response(provider, api_key, model_choice, f"Pro prompt for {target}: {raw_p}")
+                if res: st.session_state['img_res'] = res
+        with col2:
+            if 'img_res' in st.session_state:
+                st.code(st.session_state['img_res'])
 
-                    res = generate_ai_response(provider, api_key, model_choice, text_context, images_list)
-                    
-                    if res:
-                        st.session_state['res'] = res
-                        with col2:
-                            st.markdown("### 🔍 Result:")
-                            st.code(res, language="markdown")
-            else:
-                st.warning("Please enter a question first!")
+    # --- Tab 2: Vision Studio ---
+    with tabs[1]:
+        v_ups = st.file_uploader("Upload Images (Up to 10)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+        v_q = st.text_input("What to do with images?")
+        if st.button("Analyze Vision"):
+            imgs = [Image.open(f) for f in v_ups] if v_ups else []
+            res = generate_response(provider, api_key, model_choice, v_q if v_q else "Describe these", imgs)
+            if res: st.markdown(f'<div class="result-box">{res}</div>', unsafe_allow_html=True)
+
+    # --- Tab 3: Ultimate Doc Analyzer (The Beast) ---
+    with tabs[2]:
+        docs = st.file_uploader("Files (PDF, Word, Excel, PPT, Code, Text)", type=["pdf", "docx", "xlsx", "pptx", "txt", "py", "jpg", "png"], accept_multiple_files=True)
+        payload = []
+        if docs:
+            for d in docs[:10]:
+                ext = d.name.split('.')[-1].lower()
+                if ext in ['docx', 'xlsx', 'pptx']: payload.append(process_office_file(d))
+                elif ext in ['txt', 'py']: payload.append(f"File: {d.name}\n{d.getvalue().decode('utf-8')}")
+                elif ext == 'pdf':
+                    pdf = fitz.open(stream=d.read(), filetype="pdf")
+                    for p in pdf: payload.append(Image.open(io.BytesIO(p.get_pixmap(matrix=fitz.Matrix(1,1)).tobytes("png"))))
+                else: payload.append(Image.open(d))
+            st.success(f"Loaded {len(docs[:10])} files.")
+
+        d_q = st.text_area("Instructions:")
+        if st.button("Deep Analysis 🚀") and payload:
+            res = generate_response(provider, api_key, model_choice, d_q, [p for p in payload if isinstance(p, Image.Image)])
+            # إضافة النصوص من الـ payload للطلب لو كان الموديل Gemini
+            if res: 
+                st.session_state['doc_res'] = res
+                st.code(res, language="markdown") # Copy Text feature
+                c1, c2 = st.columns(2)
+                c1.download_button("Word 📄", get_word_download(res), "Report.docx")
+                ex = get_excel_download(res)
+                if ex: c2.download_button("Excel 📊", ex, "Data.xlsx")
+
+    # --- Tab 4: Universal Architect ---
+    with tabs[3]:
+        u_in = st.text_area("Your Idea:")
+        if st.button("Build Professional Prompt"):
+            res = generate_response(provider, api_key, model_choice, f"Assign Role, Context, Task for: {u_in}")
+            if res: st.code(res)
+
 else:
-    st.info("👈 Please enter your API Key in the sidebar.")
+    st.info("👈 Please select a provider and enter API Key.")
