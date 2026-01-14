@@ -2,11 +2,13 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 import io
+import time
 import requests
 import fitz  # PyMuPDF
 import pandas as pd
 from docx import Document
 from pptx import Presentation
+from google.api_core import exceptions
 
 # --- 1. إعدادات الصفحة والتصميم ---
 st.set_page_config(page_title="AI Architect Pro", page_icon="🪄", layout="wide")
@@ -23,7 +25,25 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. وظائف تصدير وتحليل الملفات ---
+# --- 2. وظيفة المعالجة الآمنة (حل مشكلة Quota) ---
+def safe_generate_content(model, payload):
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            return model.generate_content(payload)
+        except exceptions.ResourceExhausted:
+            if i < max_retries - 1:
+                wait_time = (i + 1) * 5
+                st.warning(f"⚠️ الحصة ممتلئة.. سأحاول مرة أخرى تلقائياً خلال {wait_time} ثواني...")
+                time.sleep(wait_time)
+            else:
+                st.error("❌ تم تجاوز حصة الاستخدام المجانية لليوم. يرجى اختيار موديل Flash أو المحاولة لاحقاً.")
+        except Exception as e:
+            st.error(f"❌ حدث خطأ: {e}")
+            break
+    return None
+
+# --- 3. وظائف تصدير وتحليل الملفات ---
 def get_word_download(text):
     doc = Document()
     doc.add_heading('AI Architect Pro - Analysis Report', 0)
@@ -50,21 +70,22 @@ def get_excel_download(text):
 def process_office_file(file):
     ext = file.name.split('.')[-1].lower()
     content = ""
-    if ext == 'docx':
-        doc = Document(file)
-        content = "\n".join([p.text for p in doc.paragraphs])
-    elif ext == 'pptx':
-        prs = Presentation(file)
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    content += shape.text + "\n"
-    elif ext == 'xlsx':
-        df = pd.read_excel(file)
-        content = "Excel Data Summary:\n" + df.to_string()
+    try:
+        if ext == 'docx':
+            doc = Document(file)
+            content = "\n".join([p.text for p in doc.paragraphs])
+        elif ext == 'pptx':
+            prs = Presentation(file)
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"): content += shape.text + "\n"
+        elif ext == 'xlsx':
+            df = pd.read_excel(file)
+            content = "Excel Summary:\n" + df.to_string()
+    except Exception as e: content = f"Error reading file: {e}"
     return f"--- File: {file.name} ---\n{content}"
 
-# --- 3. القائمة الجانبية ---
+# --- 4. القائمة الجانبية ---
 with st.sidebar:
     st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
     api_key = st.text_input("Gemini API Key:", type="password")
@@ -73,10 +94,11 @@ with st.sidebar:
         try:
             genai.configure(api_key=api_key)
             available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            current_model = st.selectbox("Intelligence Level:", [m for m in available_models if "1.5" in m] or available_models)
+            current_model = st.selectbox("Intelligence Level:", [m for m in available_models if "1.5" in m] or available_models, index=0)
+            st.info("💡 نصيحة: موديل Flash حصته أكبر وأقل عرضة لخطأ Quota.")
         except: st.error("Invalid API Key")
 
-# --- 4. واجهة المستخدم الرئيسية ---
+# --- 5. واجهة المستخدم الرئيسية ---
 if api_key:
     try:
         model = genai.GenerativeModel(current_model)
@@ -84,7 +106,7 @@ if api_key:
         
         tabs = st.tabs(["✨ Image Prompts", "📸 Vision Studio", "📑 Ultimate Doc Analyzer", "🧠 Universal Architect"])
 
-        # --- Ultimate Doc Analyzer (With Copy Text) ---
+        # --- Ultimate Doc Analyzer (القسم الأكثر تطوراً) ---
         with tabs[2]:
             st.markdown("### 📑 PDF, Office, Code & Text Intelligence")
             allowed_types = ["pdf", "png", "jpg", "txt", "py", "docx", "xlsx", "pptx"]
@@ -99,23 +121,22 @@ if api_key:
                     elif ext == "pdf":
                         pdf_file = fitz.open(stream=doc.read(), filetype="pdf")
                         for page in pdf_file:
-                            pix = page.get_pixmap(matrix=fitz.Matrix(1.5,1.5))
+                            pix = page.get_pixmap(matrix=fitz.Matrix(1,1)) # جودة متوسطة لتوفير الحصة
                             final_payload.append(Image.open(io.BytesIO(pix.tobytes("png"))))
                     else:
                         final_payload.append(Image.open(doc))
-                st.success(f"Loaded {len(up_docs[:10])} files.")
+                st.success(f"تم تجهيز {len(up_docs[:10])} ملفات.")
 
-            d_query = st.text_area("التعليمات:", placeholder="لخص، ترجم، استخرج جداول، أو قارن الملفات...")
+            d_query = st.text_area("التعليمات:", placeholder="لخص الملفات، استخرج جداول، أو قارن البيانات...")
             
             if st.button("Deep Analysis 🚀") and final_payload:
-                with st.spinner("Processing all documents..."):
-                    res = model.generate_content([d_query] + final_payload)
-                    st.session_state['final_res'] = res.text
+                with st.spinner("🧠 جاري التحليل مع حماية الحصة (Safe Processing)..."):
+                    res = safe_generate_content(model, [d_query] + final_payload)
+                    if res: st.session_state['final_res'] = res.text
                     
             if 'final_res' in st.session_state:
                 st.markdown("### 🔍 نتائج التحليل:")
-                # ميزة الـ Copy Text: عرض النتيجة داخل كود بلوك لسهولة النسخ
-                st.code(st.session_state['final_res'], language="markdown")
+                st.code(st.session_state['final_res'], language="markdown") # ميزة النسخ المباشر
                 
                 st.markdown("### 📥 تحميل وتصدير:")
                 c1, c2 = st.columns(2)
@@ -123,28 +144,30 @@ if api_key:
                 ex = get_excel_download(st.session_state['final_res'])
                 if ex: c2.download_button("Download Data (Excel) 📊", ex, "Extracted_Data.xlsx")
 
-        # --- باقي التابات (للإبقاء على البرنامج كاملاً) ---
+        # التابات الأخرى مع استخدام Safe Generate
         with tabs[0]:
             st.markdown("### ✍️ Image Prompts Builder")
-            raw_p = st.text_area("Describe your idea:", key="tab0_p")
-            if st.button("Build Prompt", key="tab0_btn"): 
-                r = model.generate_content(f"Pro prompt for {raw_p}"); st.code(r.text)
+            raw_p = st.text_area("Describe idea:", key="t0_p")
+            if st.button("Build Prompt"):
+                r = safe_generate_content(model, f"Pro prompt for {raw_p}")
+                if r: st.code(r.text)
 
         with tabs[1]:
-            st.markdown("### 📸 Image Intelligence")
-            v_ups = st.file_uploader("Upload Image", type=["jpg", "png"], key="tab1_up")
+            st.markdown("### 📸 Vision Intelligence")
+            v_ups = st.file_uploader("Images", type=["jpg", "png"], key="t1_up", accept_multiple_files=True)
             if v_ups:
-                st.image(v_ups, width=300)
-                q_v = st.text_input("Question about image?", key="tab1_q")
-                if st.button("Analyze Image", key="tab1_btn"):
-                    r = model.generate_content(["Analyze:", Image.open(v_ups), q_v]); st.write(r.text)
+                q_v = st.text_input("Question?")
+                if st.button("Analyze"):
+                    r = safe_generate_content(model, [q_v] + [Image.open(f) for f in v_ups])
+                    if r: st.markdown(f'<div class="result-box">{r.text}</div>', unsafe_allow_html=True)
 
         with tabs[3]:
             st.markdown("### 🧠 Universal Prompt Architect")
-            u_in = st.text_area("Idea:", key="tab3_in")
-            if st.button("Build Full Prompt", key="tab3_btn"): 
-                r = model.generate_content(f"Expert prompt for: {u_in}"); st.code(r.text)
+            u_in = st.text_area("Request Idea:", key="t3_in")
+            if st.button("Generate Professional Prompt"):
+                r = safe_generate_content(model, f"Professional structured prompt for: {u_in}")
+                if r: st.code(r.text)
 
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"General Error: {e}")
 else:
     st.info("👈 يرجى إدخال API Key للبدء")
