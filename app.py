@@ -6,45 +6,71 @@ import io, base64, time, json, os, sys
 import fitz  # PyMuPDF
 import pandas as pd
 from docx import Document
+from pptx import Presentation
 
-# --- 0. ضبط الترميز والبيئة ---
+# --- 0. إعدادات النظام ---
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-KEYS_FILE = "free_keys_config.json"
+KEYS_FILE = "pure_vault.json"
 
-def save_keys_to_vault(keys_dict):
+def save_to_vault(data):
     with open(KEYS_FILE, 'w') as f:
-        json.dump(keys_dict, f)
+        json.dump(data, f)
 
-def load_keys_from_vault():
+def load_from_vault():
     if os.path.exists(KEYS_FILE):
         try:
             with open(KEYS_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                return {p: data.get(p, {"key": "", "label": ""}) for p in ["Gemini", "Groq"]}
         except: pass
-    return {"Gemini": "", "Groq": ""}
+    return {p: {"key": "", "label": ""} for p in ["Gemini", "Groq"]}
 
-# --- 1. تصميم الواجهة السينمائية (Midjourney Dark Style) ---
-st.set_page_config(page_title="AI Architect | Free Edition", page_icon="🪄", layout="wide")
+# --- 1. محرك الإضاءة (Theme Engine) ---
+if 'theme' not in st.session_state:
+    st.session_state.theme = "Dark (Cinematic)"
 
-st.markdown("""
+with st.sidebar:
+    st.markdown("### 🌓 UI Lighting Mode")
+    theme_choice = st.selectbox("Select Theme", ["Dark (Cinematic)", "White (Clean)", "Automatic (Device)"])
+    st.session_state.theme = theme_choice
+
+# تطبيق الـ CSS بناءً على اختيار الإضاءة
+if st.session_state.theme == "Dark (Cinematic)":
+    main_bg, text_col, card_bg, border_col = "radial-gradient(circle at 20% 20%, #1a1a2e 0%, #0b0b0e 100%)", "#e0e0e0", "rgba(255,255,255,0.03)", "rgba(255,255,255,0.08)"
+elif st.session_state.theme == "White (Clean)":
+    main_bg, text_col, card_bg, border_col = "#ffffff", "#1a1a1a", "#f8f9fa", "#dee2e6"
+else:
+    main_bg, text_col, card_bg, border_col = "transparent", "inherit", "rgba(128,128,128,0.05)", "rgba(128,128,128,0.1)"
+
+st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
-    .stApp { background: radial-gradient(circle at 20% 20%, #1a1a2e 0%, #0b0b0e 100%); color: #e0e0e0; font-family: 'Inter', sans-serif; }
-    .stTabs [aria-selected="true"] { color: #eb4d4b !important; border-bottom: 2px solid #eb4d4b !important; }
-    .stButton>button { background: #eb4d4b; color: white; border-radius: 50px; font-weight: 600; width: 100%; transition: 0.3s; }
-    .stButton>button:hover { background: #ff6b6b; transform: scale(1.02); }
-    .result-card { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; padding: 25px; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+    .stApp {{ background: {main_bg}; color: {text_col}; }}
+    .result-card {{ background: {card_bg}; border: 1px solid {border_col}; border-radius: 20px; padding: 25px; margin-top: 20px; }}
+    .stButton>button {{ background: #eb4d4b; color: white; border-radius: 50px; font-weight: 600; width: 100%; }}
+    .account-tag {{ background: rgba(0, 210, 255, 0.1); color: #00d2ff; padding: 4px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. إدارة الحالة والمفاتيح ---
-if 'free_keys' not in st.session_state:
-    st.session_state.free_keys = load_keys_from_vault()
+# --- 2. إدارة الحالة ---
+if 'api_vault' not in st.session_state:
+    st.session_state.api_vault = load_from_vault()
 
-# --- 3. محرك التوليد (المجاني فقط) ---
-def run_ai_free(provider, key, model, prompt, images=None):
+# --- 3. وظائف المعالجة والذكاء ---
+def process_any_file(file):
+    ext = file.name.split('.')[-1].lower()
+    try:
+        if ext == 'docx': return "\n".join([p.text for p in Document(file).paragraphs])
+        elif ext == 'xlsx': return f"Excel Data: {pd.read_excel(file).to_string()}"
+        elif ext == 'pptx':
+            prs = Presentation(file)
+            return "\n".join([sh.text for s in prs.slides for sh in s.shapes if hasattr(sh, "text")])
+        elif ext in ['txt', 'py']: return file.getvalue().decode('utf-8')
+    except: return f"Error in {file.name}"
+    return ""
+
+def run_pure_ai(provider, key, model, prompt, images=None):
     try:
         if provider == "Google Gemini":
             genai.configure(api_key=key)
@@ -52,55 +78,67 @@ def run_ai_free(provider, key, model, prompt, images=None):
         elif provider == "Groq":
             c = Groq(api_key=key)
             return c.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}]).choices[0].message.content
-    except Exception as e: return f"⚠️ خطأ: {str(e)}"
+    except Exception as e: return f"⚠️ Error: {str(e)}"
 
 # --- 4. واجهة المستخدم الرئيسية ---
-st.markdown("<h1 style='text-align:center;'>AI ARCHITECT <span style='color:#eb4d4b'>FREE POWER</span></h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center;'>AI ARCHITECT <span style='color:#eb4d4b'>PURE EDITION</span></h1>", unsafe_allow_html=True)
 
-tabs = st.tabs(["📑 Analyzer", "🎨 Studio", "🔐 Key Vault"])
+tabs = st.tabs(["📑 Analyzer", "🎨 Studio", "🔐 Key Vault", "📊 Status"])
 
-# --- TAB: Key Vault (لحفظ المفاتيح المجانية) ---
+# --- TAB: Key Vault ---
 with tabs[2]:
-    st.markdown("### 🔐 Free Key Vault")
-    st.info("قم بحفظ مفاتيح Gemini و Groq لتفعيل البرنامج مجاناً بالكامل.")
-    col_k1, col_k2 = st.columns(2)
-    with col_k1:
-        v_gem = st.text_input("Gemini API Key:", value=st.session_state.free_keys["Gemini"], type="password")
-    with col_k2:
-        v_groq = st.text_input("Groq API Key:", value=st.session_state.free_keys["Groq"], type="password")
-    
-    if st.button("SAVE KEYS 💾"):
-        new_keys = {"Gemini": v_gem, "Groq": v_groq}
-        st.session_state.free_keys = new_keys
-        save_keys_to_vault(new_keys)
-        st.success("تم الحفظ بنجاح! البرنامج جاهز للعمل مجاناً.")
+    st.markdown("### 🔐 Secure Vault")
+    for p in ["Gemini", "Groq"]:
+        col1, col2 = st.columns([2, 1])
+        with col1: st.session_state.api_vault[p]["key"] = st.text_input(f"{p} Key:", value=st.session_state.api_vault[p]["key"], type="password", key=f"k_{p}")
+        with col2: st.session_state.api_vault[p]["label"] = st.text_input(f"Account Label:", value=st.session_state.api_vault[p]["label"], key=f"l_{p}", placeholder="e.g. My Account")
+    if st.button("SAVE CONFIGURATIONS 💾"):
+        save_to_vault(st.session_state.api_vault)
+        st.success("تم الحفظ بنجاح!")
 
 # --- TAB: Analyzer ---
 with tabs[0]:
     c1, c2 = st.columns([1, 1.2], gap="large")
     with c1:
-        provider_choice = st.selectbox("Select Free Brain:", ["Google Gemini", "Groq"])
-        active_key = st.session_state.free_keys.get(provider_choice)
+        choice = st.selectbox("Select Brain:", ["Google Gemini", "Groq"])
+        acc_info = st.session_state.api_vault.get(choice.split()[0], {"key": "", "label": ""})
         
-        selected_model = ""
-        if active_key:
+        if acc_info["key"]:
+            st.markdown(f"📍 Connected: <span class='account-tag'>{acc_info['label']}</span>", unsafe_allow_html=True)
             try:
-                if provider_choice == "Google Gemini":
-                    genai.configure(api_key=active_key)
+                if choice == "Google Gemini":
+                    genai.configure(api_key=acc_info["key"])
                     models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                    selected_model = st.selectbox("Select Free Model:", models, index=0)
+                    active_model = st.selectbox("Model:", models, index=0)
                 else:
-                    selected_model = st.selectbox("Select Free Model:", [m.id for m in Groq(api_key=active_key).models.list().data])
-            except: st.warning("تأكد من صحة المفتاح المسجل.")
+                    active_model = st.selectbox("Model:", [m.id for m in Groq(api_key=acc_info["key"]).models.list().data])
+            except: st.warning("المفتاح غير صحيح.")
+            
+            files = st.file_uploader("Upload Docs or Images", accept_multiple_files=True)
+            user_q = st.text_area("Your Request:")
+            if st.button("RUN ANALYSIS 🚀"):
+                txt_ctx, img_ctx = "", []
+                if files:
+                    for f in files:
+                        ext = f.name.split('.')[-1].lower()
+                        if ext in ['jpg','png','jpeg']: img_ctx.append(Image.open(f))
+                        elif ext == 'pdf':
+                            pdf = fitz.open(stream=f.read(), filetype="pdf")
+                            for page in pdf: img_ctx.append(Image.open(io.BytesIO(page.get_pixmap(matrix=fitz.Matrix(1,1)).tobytes("png"))))
+                        else: txt_ctx += process_any_file(f)
+                
+                with st.spinner("Analyzing..."):
+                    res = run_pure_ai(choice, acc_info["key"], active_model, txt_ctx + "\n" + user_q, img_ctx)
+                    st.session_state.last_res = res
+        else: st.info("يرجى إدخال المفتاح في تاب Key Vault.")
 
-        files = st.file_uploader("Upload Docs or Images", accept_multiple_files=True)
-        user_input = st.text_area("What's the mission?")
-        if st.button("RUN ANALYSIS 🚀"):
-            with st.spinner("Analyzing..."):
-                res = run_ai_free(provider_choice, active_key, selected_model, user_input)
-                st.session_state.result_free = res
-
-    if 'result_free' in st.session_state:
+    if 'last_res' in st.session_state:
         with c2:
-            st.markdown(f'<div class="result-card">{st.session_state.result_free}</div>', unsafe_allow_html=True)
-            st.code(st.session_state.result_free)
+            st.markdown(f'<div class="result-card">{st.session_state.last_res}</div>', unsafe_allow_html=True)
+            st.code(st.session_state.last_res)
+
+# --- TAB: Status ---
+with tabs[3]:
+    st.markdown("### 📊 System Connection")
+    for p, info in st.session_state.api_vault.items():
+        st.write(f"**{p}** ({info['label']}): {'✅ Active' if info['key'] else '🔴 Offline'}")
