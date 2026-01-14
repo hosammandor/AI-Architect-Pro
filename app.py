@@ -13,7 +13,7 @@ from google.api_core import exceptions
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-# --- 1. إعدادات الصفحة والتصميم العصرى ---
+# --- 1. إعدادات الصفحة والتصميم ---
 st.set_page_config(page_title="AI Architect Multi-Power", page_icon="🪄", layout="wide")
 
 st.markdown("""
@@ -28,7 +28,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. وظائف المساعدة (تحويلات الملفات) ---
+# --- 2. وظائف المساعدة ---
 def get_word_download(text):
     doc = Document()
     doc.add_heading('AI Architect Pro - Report', 0)
@@ -76,7 +76,7 @@ def encode_image(image):
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-# --- 3. محرك التوليد الآمن (Multi-Provider + Retry) ---
+# --- 3. محرك التوليد الآمن (تعديل الموديلات) ---
 def generate_response(provider, api_key, model_name, query, images=None):
     max_retries = 2
     for i in range(max_retries + 1):
@@ -89,7 +89,8 @@ def generate_response(provider, api_key, model_name, query, images=None):
             
             elif provider == "Groq (Ultra Fast)":
                 client = Groq(api_key=api_key)
-                if images and "vision" in model_name.lower():
+                # التحقق مما إذا كان الموديل يدعم الرؤية (Vision)
+                if images and ("vision" in model_name.lower() or "90b" in model_name.lower()):
                     msgs = [{"role": "user", "content": [{"type": "text", "text": query}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encode_image(images[0])}"}}]}]
                 else:
                     msgs = [{"role": "user", "content": query}]
@@ -97,14 +98,13 @@ def generate_response(provider, api_key, model_name, query, images=None):
                 return res.choices[0].message.content
         
         except exceptions.ResourceExhausted:
-            if i < max_retries: 
-                time.sleep(5); continue
+            if i < max_retries: time.sleep(5); continue
             else: st.error("Quota Exceeded!"); return None
         except Exception as e:
             st.error(f"Error: {str(e)}"); return None
     return None
 
-# --- 4. القائمة الجانبية ---
+# --- 4. القائمة الجانبية (تحديث الموديلات هنا) ---
 with st.sidebar:
     st.markdown("<h2 style='text-align: center; color: #00d2ff;'>💎 Control Center</h2>", unsafe_allow_html=True)
     provider = st.selectbox("AI Provider:", ["Google Gemini", "Groq (Ultra Fast)"])
@@ -114,11 +114,17 @@ with st.sidebar:
         if provider == "Google Gemini":
             genai.configure(api_key=api_key)
             models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            model_choice = st.selectbox("Model:", models, index=models.index("gemini-1.5-flash") if "gemini-1.5-flash" in models else 0)
+            model_choice = st.selectbox("Model:", models, index=0)
         else:
-            model_choice = st.selectbox("Model:", ["llama-3.2-11b-vision-preview", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
+            # تم تحديث الموديلات هنا لتجنب خطأ الـ Decommissioned
+            model_choice = st.selectbox("Model:", [
+                "llama-3.3-70b-versatile",    # الأحدث والأقوى للنصوص
+                "llama-3.2-90b-vision-preview", # الموديل البديل للرؤية (Vision)
+                "llama-3.1-8b-instant",        # فائق السرعة
+                "mixtral-8x7b-32768"           # موديل بديل ممتاز
+            ])
 
-# --- 5. واجهة المستخدم الرئيسية ---
+# --- 5. واجهة المستخدم ---
 if api_key:
     st.markdown("<h1 style='text-align: center;'>🪄 AI Architect <span style='color: #00d2ff;'>Multi-Power</span></h1>", unsafe_allow_html=True)
     
@@ -146,7 +152,7 @@ if api_key:
             res = generate_response(provider, api_key, model_choice, v_q if v_q else "Describe these", imgs)
             if res: st.markdown(f'<div class="result-box">{res}</div>', unsafe_allow_html=True)
 
-    # --- Tab 3: Ultimate Doc Analyzer (The Beast) ---
+    # --- Tab 3: Ultimate Doc Analyzer ---
     with tabs[2]:
         docs = st.file_uploader("Files (PDF, Word, Excel, PPT, Code, Text)", type=["pdf", "docx", "xlsx", "pptx", "txt", "py", "jpg", "png"], accept_multiple_files=True)
         payload = []
@@ -162,12 +168,15 @@ if api_key:
             st.success(f"Loaded {len(docs[:10])} files.")
 
         d_q = st.text_area("Instructions:")
-        if st.button("Deep Analysis 🚀") and payload:
-            res = generate_response(provider, api_key, model_choice, d_q, [p for p in payload if isinstance(p, Image.Image)])
-            # إضافة النصوص من الـ payload للطلب لو كان الموديل Gemini
+        if st.button("Deep Analysis 🚀") and (payload or d_q):
+            # تجميع النصوص من الـ payload لضمان وصولها للموديل
+            text_context = "\n".join([item for item in payload if isinstance(item, str)])
+            full_query = f"{d_q}\n\nContext from files:\n{text_context}"
+            
+            res = generate_response(provider, api_key, model_choice, full_query, [p for p in payload if isinstance(p, Image.Image)])
             if res: 
                 st.session_state['doc_res'] = res
-                st.code(res, language="markdown") # Copy Text feature
+                st.code(res, language="markdown")
                 c1, c2 = st.columns(2)
                 c1.download_button("Word 📄", get_word_download(res), "Report.docx")
                 ex = get_excel_download(res)
